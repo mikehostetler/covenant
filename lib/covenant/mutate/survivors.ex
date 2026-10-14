@@ -246,7 +246,7 @@ defmodule Covenant.Mutate.Survivors do
   def matches?(%Annotation{pinned: id}, %Mutant{id: mutant}) when is_binary(id), do: id == mutant
 
   def matches?(%Annotation{unit: unit} = annotation, %Mutant{} = mutant) when unit != nil,
-    do: unit == unit(mutant) and (wildcard?(annotation) or same_change?(annotation, mutant))
+    do: unit in units(mutant) and (wildcard?(annotation) or same_change?(annotation, mutant))
 
   def matches?(%Annotation{} = annotation, %Mutant{} = mutant) do
     annotation.at == Mutant.at(mutant) and
@@ -332,8 +332,13 @@ defmodule Covenant.Mutate.Survivors do
   # The unit's mutants that pass `fun`, in source order.
   defp sharing(mutants, unit, fun) do
     mutants
-    |> Enum.filter(&(unit(&1) == unit and fun.(&1)))
+    |> Enum.filter(&(unit in units(&1) and fun.(&1)))
     |> Enum.sort_by(&{&1.file, &1.line, &1.column, &1.id})
+  end
+
+  defp units(%Mutant{function: function} = mutant) do
+    for module <- Mutant.modules(mutant),
+        do: if(function, do: "#{module}.#{function}", else: module)
   end
 
   @doc "The unit a mutant belongs to, `Module.function/arity`, or the module for code outside a function."

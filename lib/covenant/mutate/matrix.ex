@@ -148,7 +148,7 @@ defmodule Covenant.Mutate.Matrix do
       |> Enum.uniq()
       |> Enum.sort()
 
-    Map.put(mutant, :obligations, obligations)
+    %{mutant | obligations: obligations}
   end
 
   defp obligation_stats(component, mutants) do
@@ -217,10 +217,16 @@ defmodule Covenant.Mutate.Matrix do
     end
   end
 
-  defp inside?(%Mutant{module: module, function: function}, {:function, mod, fun, arity}),
-    do: module == inspect(mod) and function == "#{fun}/#{arity}"
+  # A single implementation exception cannot exempt a shared source body that
+  # also changes another implementation. A file exception can cover the body.
+  defp inside?(%Mutant{function: function} = mutant, {:function, mod, fun, arity}),
+    do:
+      Mutant.modules(mutant) != [] and Enum.all?(Mutant.modules(mutant), &(&1 == inspect(mod))) and
+        function == "#{fun}/#{arity}"
 
-  defp inside?(%Mutant{module: module}, {:module, mod}), do: module == inspect(mod)
+  defp inside?(%Mutant{} = mutant, {:module, mod}),
+    do: Mutant.modules(mutant) != [] and Enum.all?(Mutant.modules(mutant), &(&1 == inspect(mod)))
+
   defp inside?(%Mutant{file: file}, {:file, path}), do: file == path
 
   defp stale(annotations, mutants) do

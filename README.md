@@ -323,7 +323,58 @@ The modules to mutate come from `--module` flags, else the `modules:` front matt
 | `element_removal` | one element of a list or one pair of a map is dropped |
 | `ecto_where_removal` | a `\|> where(...)` stage or a `where:` key of `from` is dropped |
 
-Docs, specs, types, `defmacro`, `defguard`, `defstruct` and `defexception` fields, `use`, `import`, `alias`, `require`, sigils and `quote` are never mutated. Struct literals in tests are expanded at compile time, so a mutant of a struct default could never be killed. A run that finds nothing to mutate is an error, and a module with no mutants is warned about.
+By default, docs, specs, types, `defmacro`, `defguard`, `defstruct` and `defexception` fields, `use`, `import`, `alias`, `require`, sigils and `quote` are not mutated. Struct literals in tests are expanded at compile time, so a mutant of a struct default could never be killed. A run that finds nothing to mutate is an error, and a module with no mutants is warned about.
+
+Mutation jobs have a one-hour total deadline. Use `--max-runtime MS` to set
+another positive limit. This includes preparation and worker replacements;
+`--timeout` remains the per-test limit. SIGTERM cancels the job and closes its
+worker ports. Completed verdicts are saved atomically before progress is printed.
+An incomplete or cancelled job keeps its raw-result directory and names it in the
+output. These partial files do not establish a complete mutation gate.
+
+Each worker VM handles at most 50 mutation verdicts. Set a positive
+`--max-mutants-per-worker N` to change this limit. The original tests must pass
+after each group before its worker retires. A fresh VM then checks the remaining
+IDs, with the same concurrent worker limit and whole-job deadline. This bounds
+the accumulation of VM module indices and atoms from repeated compilation;
+purging generated code alone cannot reclaim all of this VM bookkeeping.
+
+Mutation cleanup uses independent VM trace sessions and needs Erlang/OTP 27 or
+later. It tracks in-memory module loads in runtime and macro mode, including
+helpers deleted by tests. Tracking records module names, never code binaries.
+Baseline, mutant and final verification test runs all use this cleanup.
+
+A `defimpl` body shared by several types has one mutation per source change.
+Its JSON records all implementation modules in `modules`, while `module` keeps
+the primary name for compatibility. Both module selection and primitive
+ownership use all names. An exception for only one implementation does not
+exempt the other implementations in the shared body.
+
+To test a macro provider such as `__using__/1`, select macro mode and name the
+compiled callers that the contract tests use:
+
+```sh
+mix covenant.mutate example.builder --macros \
+  --recompile lib/example/consumer.ex \
+  --recompile lib/example/derived.ex
+```
+
+Macro mode includes `defmacro`, `defmacrop`, and quoted code inside them. It
+also keeps the normal runtime mutation sites. For each mutant, Covenant
+compiles the listed caller sources in order, then the contract test files.
+This makes generated functions, macro expansions, and compile-time test values
+observe the current mutant. Caller and test modules are restored from their
+compiled baseline afterward; new modules compiled in memory are removed,
+including those with virtual source filenames. No source or beam file is written.
+
+List all direct and transitive compiled callers that the selected tests need,
+with providers before their callers. Caller discovery is not automatic.
+Repeat `--recompile` for more files, or use a quoted glob whose matches compile
+in filename order. Calls that the tests compile themselves need no extra entry.
+A caller compilation failure makes the mutant invalid and gives no kill credit;
+an assertion failure during a test gives normal obligation credit. Macro mode
+still skips guards, structural declarations, compiler attributes, docs and
+types, and quotes outside macro definitions.
 
 A mutant is killed when a test fails for any reason but a timeout, survives when every test passes, and is invalid when it doesn't compile; a mutant the tests only time out against is a survivor. A kill is credited to the obligations tagged on every test that failed. An obligation's unique kills are the mutants only its tests caught. A test with no unique kill is mutation-blind and is listed as a warning; `@tag mutation_blind: "reason"` keeps the reason beside the warning.
 
@@ -361,6 +412,18 @@ Every worker, `--jobs 1` included, runs the tests from a private copy of the pro
 - A watchdog stops a mutant when no test finishes for ten times the baseline, plus five seconds, plus the per-test timeout. The mutant is a `timeout`, a survivor, unless a test had already failed against it, which makes it a kill with partial credit. The task starts a new worker for the rest.
 - A worker dies with its parent and removes its copy first. Whenever it removes a copy that the suite's processes may still be writing to, it steps out of the copy beforehand, so nothing they write by a relative path can keep it alive.
 - Concurrent runs of one component don't clobber each other.
+
+The final matrix uses a temporary file unique to its run and replaces the
+output atomically. When two runs use the same output path, the file contains
+one complete matrix from the last writer. Their temporary files stay separate.
+
+Runtime functions in handwritten `defimpl` blocks belong to the generated
+protocol implementation module. Fully qualified literal protocol and type
+names, built-in types, lists of types, and an omitted `for:` inside a module
+are supported. Lexical aliases, including aliases from nested declarations,
+are not resolved. The `for:` declaration is not a
+mutation site. A `defimpl` emitted by a macro remains in the provider macro's
+scope.
 
 ## The sibling layout
 
@@ -532,7 +595,7 @@ The test of a Contract is regeneration. If a component can be deleted and rebuil
 
 ## How Covenant holds itself to account
 
-Covenant has its own Contract in [`contracts/`](https://github.com/tools4imps/covenant/tree/main/contracts): 96 obligations across ten light-form components, a system intent and the decision records behind its policies. Every test in `test/contract/` is a `Covenant.Case` test that names its obligations. CI runs the suite and `mix covenant.check` on every push, on Elixir 1.18 and 1.19.
+Covenant has its own Contract in [`contracts/`](https://github.com/tools4imps/covenant/tree/main/contracts): 101 obligations across ten light-form components, a system intent and the decision records behind its policies. Every test in `test/contract/` is a `Covenant.Case` test that names its obligations. CI runs the suite and `mix covenant.check` on every push, on Elixir 1.18 and 1.19.
 
 Two components are mutated with Covenant itself. `covenant.conditions` makes 242 mutants: 211 killed, 29 invalid, and 2 survivors. `covenant.mutate`, run against its own unit tests, makes 1541: 1325 killed, 150 invalid, 2 timeouts, and 64 survivors. Every survivor is sorted, with its reason, in `contracts/covenant/*.survivors.yml`.
 

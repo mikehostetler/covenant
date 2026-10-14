@@ -68,8 +68,8 @@ defmodule Covenant.TasksUmbrellaContractTest do
     assert output =~
              "covenant.check: running mix test apps/other/test/contract apps/shop/test/contract\n"
 
-    assert output =~ ~r/1 test, 0 failures/
-    assert output =~ ~r/2 tests, 0 failures/
+    assert output =~ ~r/(1 test, 0 failures|Result: 1 passed)/
+    assert output =~ ~r/(2 tests, 0 failures|Result: 2 passed)/
     assert output =~ ~r/total\s+3\/3\s+100\.0%/
     assert output =~ "covenant.check: the Contract holds"
   end

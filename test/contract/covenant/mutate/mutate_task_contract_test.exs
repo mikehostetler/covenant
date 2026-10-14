@@ -103,6 +103,20 @@ defmodule Covenant.MutateTaskContractTest do
     assert {1, []} = Task.jobs_for(1, 0, 8)
   end
 
+  @tag obligation: "covenant.mutate.I22", tmp_dir: true
+  test "publishing a matrix keeps another run's temporary output", %{tmp_dir: directory} do
+    path = Path.join(directory, "matrix.json")
+    other_run = path <> ".tmp"
+    File.write!(other_run, "another run is writing here")
+
+    {output, status} = mix(@vm, ["covenant.mutate", "vm.retirement", "--out", path])
+
+    assert status == 0, output
+    assert {:ok, "another run is writing here"} = File.read(other_run)
+    assert JSON.decode!(File.read!(path))["summary"]["killed"] == 3
+    assert Path.wildcard(path <> ".*.tmp") == []
+  end
+
   @tag obligation: "covenant.mutate.I23"
   test "when one worker fails the others are stopped, not waited for" do
     parent = self()

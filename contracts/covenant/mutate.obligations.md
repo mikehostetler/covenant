@@ -10,11 +10,41 @@ breaks the component's implementation one AST change at a time, runs its
 contract tests against each break and credits every kill to the obligations
 tagged on the tests that caught it, so a test that proves nothing is
 visible. The modules listed above are the ones that can be mutated in the
-VM that runs the suite; `Covenant.Mutate.Runner`, `Covenant.Mutate.Workdir`
+VM that runs the suite; `Covenant.Mutate.Runner`, `Covenant.Mutate.Recompile`, `Covenant.Mutate.Workdir`, `Covenant.Mutate.Job`
 and the Mix task run the worker itself and cannot be hot-swapped by their own
 mutants, so their obligations are proved by the tests but not self-mutated.
 
 ## Obligations
+
+### covenant.mutate.I28 — Worker VMs have bounded mutation lifetimes
+- **scope:** `mix covenant.mutate`, `Covenant.Mutate.Runner.run/1`
+- **must:** Limit each worker VM to 50 mutation verdicts by default, with a positive --max-mutants-per-worker override. Include invalid mutations in the limit. Verify the original suite before accepting a completed group and retiring the worker. Start a fresh VM for the remaining IDs only after the old worker exits. Keep the requested concurrent worker count, round-robin slices, deterministic IDs and exact test credit. Merge each verdict once. A failed verification or an ordinary incomplete checkpoint cannot request retirement or hide a failure. Keep one total deadline and cancellation scope across all worker replacements. Preserve partial results on failure and remove successful private copies and raw directories.
+- **kind:** functional
+- **status:** active
+
+### covenant.mutate.I27 — Mutation jobs are bounded and keep partial results
+- **scope:** `mix covenant.mutate`
+- **must:** Apply a total job deadline, including preparation and worker replacements. Allow a positive --max-runtime in milliseconds, with a one-hour default. Stop owned workers on deadline or cancellation. Save each completed verdict atomically before printing progress. Preserve partial raw results on worker failure and identify their directory. Partial results cannot pass as a complete mutation run. Remove successful raw-run directories.
+- **kind:** functional
+- **status:** active
+
+### covenant.mutate.I26 — Protocol implementation sites belong to the implementation module
+- **scope:** `Covenant.Mutate.Mutator.sites/2`, `mix covenant.mutate`
+- **must:** Include runtime function bodies in defimpl declarations with fully qualified literal protocol and type names. Built-in type names and the enclosing __MODULE__ reference are supported; lexical alias resolution is outside this scope. Use the generated implementation module as the mutation module, including an implicit enclosing module type and lists of types. A shared body has one mutation per source change, with all implementation module identities preserved in serialization, missing-site diagnostics, primitive ownership and survivor matching. Select a shared implementation body when any of its implementation modules is targeted, without assigning it to the protocol module or surrounding module. A protocol implementation in macro output stays in its enclosing provider's mutation scope. Keep traversal and replacement indices deterministic.
+- **kind:** functional
+- **status:** active
+
+### covenant.mutate.I24 — Macro mutation is opt-in
+- **scope:** `Covenant.Mutate.Mutator.sites/2`, `mix covenant.mutate`
+- **must:** Keep ordinary runtime mutation sites unchanged when enabling macro mode. With macros: true or --macros, include public and private macro bodies and quoted code inside them. Report the enclosing provider macro as the function, including when its output defines another macro. Keep documentation attributes, types, compiler attributes, guard definitions, structural declarations, and quotes outside macros excluded. Pass the mode to every worker and use the same mode when counting and slicing mutants. Record macros: true and the requested recompile sources in the macro kill matrix; keep the default matrix fields unchanged.
+- **kind:** functional
+- **status:** active
+
+### covenant.mutate.I25 — Macro callers are compiled for each mutant and restored
+- **scope:** `Covenant.Mutate.Runner.run/1`, `mix covenant.mutate`
+- **must:** In macro mode, compile the explicit --recompile source files in the supplied order, then the selected contract test files, against each loaded mutant. Expand source patterns in stable order and reject paths outside the project, missing sources, and target files that would overwrite the mutant. Check this compilation against the original before the baseline. Bound target and caller compilation by the worker budget. Classify a caller compilation failure as invalid without kill credit. Restore the target, caller and test modules after each completed mutant, using the caller and test binaries from their compiled baseline even when a disk BEAM differs. Remove new modules compiled in memory, including virtual source filenames, partial compilation failures and helpers that a test deletes while their old code remains. Apply cleanup to runtime and macro runs, including baseline and final verification; keep prior in-memory modules and newly loaded disk modules. Keep the final original suite green. Write no source or beam files. Caller coverage is explicit: users must list all compiled direct and transitive callers required by the selected tests.
+- **kind:** functional
+- **status:** active
 
 ### covenant.mutate.I1 — Thirteen operators, one change each
 - **scope:** `Covenant.Mutate.Operators.variants/1`
@@ -24,7 +54,7 @@ mutants, so their obligations are proved by the tests but not self-mutated.
 
 ### covenant.mutate.I2 — Mutants are enumerated deterministically at reported locations
 - **scope:** `Covenant.Mutate.Mutator.sites/2`, `Covenant.Mutate.Mutator.numbered/1`
-- **must:** list the mutants of an AST in one walk, inside the target modules (every module when none is named), each with the file, line and column of the node it changes and the module and function it sits in, a nested module by its expanded name (`__MODULE__.Inner` is the enclosing module's name followed by `.Inner`; an absolute `Elixir.Standalone` is `Standalone`); skip documentation, specs and types, compiler attributes, `defstruct` and `defexception`, macro and guard definitions, `use`/`import`/`alias`/`require`, `quote` and sigils; number them `m001`, `m002`, ... in walk order (wider than three digits past `m999`); the same source always yields the same mutants in the same order with the same ids
+- **must:** list the mutants of an AST in one walk, inside the target modules (every module when none is named), each with the file, line and column of the node it changes and the module and function it sits in, a nested module by its expanded name (`__MODULE__.Inner` is the enclosing module's name followed by `.Inner`; an absolute `Elixir.Standalone` is `Standalone`); by default skip documentation attributes, specs and types, compiler attributes, `defstruct` and `defexception`, macro and guard definitions, `use`/`import`/`alias`/`require`, `quote` and sigils; number them `m001`, `m002`, ... in walk order (wider than three digits past `m999`); the same source always yields the same mutants in the same order with the same ids
 - **why:** a struct literal in a test file is expanded when the test compiles, before any mutant is loaded, so a mutated `defstruct` default can never be killed and would be reported as a survivor although a test asserts it
 - **kind:** functional
 - **status:** active

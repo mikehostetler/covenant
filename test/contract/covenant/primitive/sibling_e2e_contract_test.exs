@@ -53,7 +53,7 @@ defmodule Covenant.SiblingE2EContractTest do
     assert status == 0, output
 
     assert output =~ "covenant.check: running mix test contract"
-    assert output =~ "3 tests, 0 failures"
+    assert output =~ ~r/(3 tests, 0 failures|Result: 3 passed)/
     assert output =~ "  calc          2/2  100.0%"
     assert output =~ "  app contract      2/2  100.0%"
     assert output =~ "wrote contract/coverage.json"

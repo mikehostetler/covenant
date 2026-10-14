@@ -54,11 +54,13 @@ defmodule Covenant.Mutate.Mutant do
           from: String.t(),
           to: String.t(),
           module: String.t() | nil,
+          modules: [String.t()],
           function: String.t() | nil,
           index: pos_integer(),
           replacement: Macro.t() | nil,
           verdict: verdict() | nil,
           killed_by: [String.t()],
+          obligations: [String.t()],
           timeouts: [String.t()],
           reason: String.t() | nil,
           credit: credit()
@@ -79,7 +81,9 @@ defmodule Covenant.Mutate.Mutant do
     :replacement,
     :verdict,
     :reason,
+    modules: [],
     killed_by: [],
+    obligations: [],
     timeouts: [],
     credit: :exact
   ]
@@ -87,6 +91,11 @@ defmodule Covenant.Mutate.Mutant do
   @operators ~w(boolean_flip comparison_swap arithmetic_swap logical_swap condition_negate
     statement_removal return_nil integer_shift string_empty guard_removal clause_removal
     element_removal ecto_where_removal)a
+
+  @doc false
+  @spec modules(t()) :: [String.t()]
+  def modules(%{modules: [_ | _] = modules}), do: modules
+  def modules(%{module: module}), do: List.wrap(module)
 
   @doc "Every operator, in the order variants are generated at a node."
   @spec operators() :: [operator()]
@@ -120,6 +129,9 @@ defmodule Covenant.Mutate.Mutant do
       "reason" => mutant.reason,
       "credit" => Atom.to_string(mutant.credit)
     }
+    |> then(fn map ->
+      if length(mutant.modules) > 1, do: Map.put(map, "modules", mutant.modules), else: map
+    end)
   end
 
   defp verdict("killed"), do: :killed
@@ -165,6 +177,7 @@ defmodule Covenant.Mutate.Mutant do
       from: map["from"],
       to: map["to"],
       module: map["module"],
+      modules: List.wrap(map["modules"]),
       function: map["function"],
       index: map["index"] || 0,
       verdict: verdict(map["verdict"]),

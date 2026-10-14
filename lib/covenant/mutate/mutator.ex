@@ -15,7 +15,8 @@ defmodule Covenant.Mutate.Mutator do
   compiles, before any mutant is loaded, so its defaults cannot be killed),
   macro and guard definitions (their bodies expand in *callers*, compiled long before
   the mutant exists), `use`/`import`/`alias`/`require`, `quote` blocks and
-  sigils.
+  sigils. With `macros: true`, macro bodies and their quoted code are included.
+  Callers must then be compiled again by the runner to observe each expansion.
 
   `compile/2` turns a (mutated) AST back into loaded modules in memory. No
   file is written: the mutant lives in the VM until `Covenant.Mutate.Runner`
@@ -28,8 +29,8 @@ defmodule Covenant.Mutate.Mutator do
     macrocallback impl behaviour derive external_resource compile dialyzer deprecated
     optional_callbacks before_compile after_compile on_definition on_load)a
 
-  @skipped_forms ~w(defmacro defmacrop defguard defguardp defdelegate defoverridable defstruct defexception use
-    import alias require quote)a
+  @skipped_forms ~w(defguard defguardp defdelegate defoverridable defstruct defexception use
+    import alias require)a
 
   @doc "Parses `source` with positions on every literal."
   @spec parse(String.t(), Path.t()) :: {:ok, Macro.t()} | {:error, String.t()}
@@ -52,14 +53,28 @@ defmodule Covenant.Mutate.Mutator do
 
   * `:file` — the path recorded on each mutant (default `"nofile"`);
   * `:modules` — the module names (strings) to mutate inside; `nil` mutates
-    every module in the file.
+    every module in the file;
+  * `:macros` — include macro bodies and their quoted code (default `false`).
   """
   @spec sites(Macro.t(), keyword()) :: [Mutant.t()]
   def sites(ast, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
     targets = Keyword.get(opts, :modules)
 
-    state = %{counter: 0, modules: [], defs: [], skip: 0, sites: [], file: file, targets: targets}
+    state = %{
+      counter: 0,
+      modules: [],
+      defs: [],
+      macros: [],
+      implementation_headers: [],
+      implementation_modules: [],
+      macros_enabled: Keyword.get(opts, :macros, false),
+      skip: 0,
+      sites: [],
+      file: file,
+      targets: targets
+    }
+
     {_, state} = Macro.traverse(ast, state, &enter/2, &leave/2)
     Enum.reverse(state.sites)
   end
@@ -95,7 +110,9 @@ defmodule Covenant.Mutate.Mutator do
             from: variant.from,
             to: variant.to,
             module: List.first(state.modules),
-            function: List.first(state.defs),
+            modules: shared_modules(state),
+            # Definitions in macro output belong to the outer provider macro.
+            function: List.last(state.macros) || List.first(state.defs),
             index: state.counter,
             replacement: variant.replacement
           }
@@ -110,39 +127,130 @@ defmodule Covenant.Mutate.Mutator do
 
   defp leave(node, state), do: {node, pop(node, state)}
 
+  # A module declared in a macro's output belongs to that macro's mutation scope.
+  defp push({:defmodule, _, [_, _]}, %{macros: [_ | _]} = state), do: state
+
   defp push({:defmodule, _, [alias, _]}, state),
     do: %{state | modules: [module_name(alias, state.modules) | state.modules]}
+
+  defp push({:defimpl, _, [_protocol | args]}, %{macros: [_ | _]} = state),
+    do: %{
+      state
+      | implementation_headers: [implementation_header(args) | state.implementation_headers],
+        implementation_modules: [[] | state.implementation_modules]
+    }
+
+  defp push({:defimpl, _, [protocol | args]}, state) do
+    options = args |> Enum.flat_map(&unwrap/1)
+    types = Keyword.get(options, :for, {:__MODULE__, [], nil})
+    protocol = reference_name(protocol, state.modules)
+
+    names =
+      types
+      |> List.wrap()
+      |> Enum.map(&(protocol <> "." <> reference_name(&1, state.modules)))
+
+    # Keep a primary module for older reports, and all identities for ownership.
+    selected =
+      Enum.find(names, &(state.targets == nil or &1 in state.targets)) || List.first(names)
+
+    %{
+      state
+      | modules: [selected | state.modules],
+        implementation_headers: [implementation_header(args) | state.implementation_headers],
+        implementation_modules: [names | state.implementation_modules]
+    }
+  end
+
+  defp push({form, _, [head | _]}, state) when form in [:defmacro, :defmacrop],
+    do: %{
+      state
+      | macros: [def_name(head) | state.macros],
+        skip: state.skip + if(state.macros_enabled, do: 0, else: 1)
+    }
 
   defp push({form, _, [head | _]}, state) when form in [:def, :defp],
     do: %{state | defs: [def_name(head) | state.defs]}
 
   defp push(node, state) do
-    if skip?(node), do: %{state | skip: state.skip + 1}, else: state
+    if skip?(node, state), do: %{state | skip: state.skip + 1}, else: state
   end
 
+  defp pop({:defmodule, _, [_, _]}, %{macros: [_ | _]} = state), do: state
   defp pop({:defmodule, _, [_, _]}, state), do: %{state | modules: tl(state.modules)}
+
+  defp pop({:defimpl, _, _}, %{macros: [_ | _]} = state),
+    do: %{
+      state
+      | implementation_headers: tl(state.implementation_headers),
+        implementation_modules: tl(state.implementation_modules)
+    }
+
+  defp pop({:defimpl, _, _}, state),
+    do: %{
+      state
+      | modules: tl(state.modules),
+        implementation_headers: tl(state.implementation_headers),
+        implementation_modules: tl(state.implementation_modules)
+    }
+
+  defp pop({form, _, [_ | _]}, state) when form in [:defmacro, :defmacrop],
+    do: %{
+      state
+      | macros: tl(state.macros),
+        skip: state.skip - if(state.macros_enabled, do: 0, else: 1)
+    }
 
   defp pop({form, _, [_ | _]}, state) when form in [:def, :defp],
     do: %{state | defs: tl(state.defs)}
 
   defp pop(node, state) do
-    if skip?(node), do: %{state | skip: state.skip - 1}, else: state
+    if skip?(node, state), do: %{state | skip: state.skip - 1}, else: state
   end
 
-  defp skip?({:@, _, [{name, _, args}]}) when name in @skipped_attributes and is_list(args),
-    do: true
+  defp skip?({:@, _, [{name, _, args}]}, _state)
+       when name in @skipped_attributes and is_list(args),
+       do: true
 
-  defp skip?({form, _, args}) when form in @skipped_forms and is_list(args), do: true
+  # The for-option selects implementation modules. It is a structural
+  # declaration, so only its implementation body supplies mutation sites.
+  defp skip?(node, %{implementation_headers: [header | _]})
+       when not is_nil(header) and node == header,
+       do: true
 
-  defp skip?({form, _, args}) when is_atom(form) and is_list(args),
+  defp skip?({:quote, _, args}, state) when is_list(args),
+    do: not state.macros_enabled or state.macros == []
+
+  defp skip?({form, _, args}, _state) when form in @skipped_forms and is_list(args), do: true
+
+  defp skip?({form, _, args}, _state) when is_atom(form) and is_list(args),
     do: String.starts_with?(Atom.to_string(form), "sigil_")
 
-  defp skip?(_), do: false
+  defp skip?(_, _state), do: false
+
+  defp shared_modules(%{macros: [], modules: [current | _], implementation_modules: [names | _]}) do
+    if current in names and length(names) > 1, do: names, else: []
+  end
+
+  defp shared_modules(_state), do: []
 
   defp targeted?(%{targets: nil, modules: [_ | _]}), do: true
   defp targeted?(%{targets: nil}), do: false
   defp targeted?(%{targets: targets, modules: [current | _]}), do: current in targets
   defp targeted?(_), do: false
+
+  defp reference_name({:__MODULE__, _, _}, [current | _]), do: current
+
+  defp reference_name({:__aliases__, _, [{:__MODULE__, _, _} | _]} = alias, modules),
+    do: module_name(alias, modules)
+
+  defp reference_name(alias, _modules), do: module_name(alias, [])
+
+  defp implementation_header(args) do
+    args
+    |> Enum.flat_map(& &1)
+    |> Enum.find(fn {key, _} -> unwrap(key) == :for end)
+  end
 
   # `__MODULE__.Inner` is the enclosing module's own name, and `Elixir.Standalone`
   # is absolute: neither is nested under the module around it

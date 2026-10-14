@@ -32,7 +32,7 @@ defmodule Covenant.TasksContractTest do
     {output, status} = mix(["covenant.check"])
     assert status == 0, output
     assert output =~ "covenant.check: running mix test test/contract"
-    assert output =~ ~r/8 tests, 0 failures/
+    assert output =~ ~r/(8 tests, 0 failures|Result: 8 passed)/
     assert output =~ ~r/example\.counter\s+6\/6\s+100\.0%/
     assert output =~ ~r/example\.greeter\s+1\/1\s+100\.0%/
     assert output =~ ~r/total\s+7\/7\s+100\.0%/
@@ -121,7 +121,7 @@ defmodule Covenant.TasksContractTest do
     assert status == 0, output
     assert output =~ "bytes:��\n"
     assert output =~ "arrow: →\n"
-    assert output =~ ~r/9 tests, 0 failures/
+    assert output =~ ~r/(9 tests, 0 failures|Result: 9 passed)/
     assert output =~ "the Contract holds"
   end
 
@@ -156,7 +156,7 @@ defmodule Covenant.TasksContractTest do
 
     {output, status} = mix(["covenant.check"])
     assert status == 1
-    assert output =~ "1 failure"
+    assert output =~ ~r/(1 failure|Failed: 1 test)/
     assert output =~ "test fails on purpose (obligation `example.greeter.I1`) failed"
     assert output =~ "contract suite failed (exit status 2)"
   end

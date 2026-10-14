@@ -222,7 +222,7 @@ defmodule Covenant.Mutate.Operators do
   defp call_statement?(_), do: false
 
   defp return_nil({form, meta, [head, body_keyword]})
-       when form in [:def, :defp] and is_list(body_keyword) do
+       when form in [:def, :defp, :defmacro, :defmacrop] and is_list(body_keyword) do
     case Enum.find_index(body_keyword, fn {key, _} -> key_name(key) == :do end) do
       nil ->
         []
